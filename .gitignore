@@ -35,8 +35,8 @@ uploads/
 backend/src/uploads/
 
 # personal / thesis / notes (do not ship)
-docs/
-scripts/
+/docs/
+/scripts/
 *.docx
 *.doc
 _*.txt
