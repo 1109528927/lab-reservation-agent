@@ -1,0 +1,48 @@
+# secrets & local env
+.env
+**/.env
+!.env.example
+!**/.env.example
+
+# python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# node / frontend
+node_modules/
+dist/
+dist-ssr/
+*.local
+.eslintcache
+
+# editors / OS
+.idea/
+.vscode/
+.cursor/
+*.swp
+.DS_Store
+Thumbs.db
+
+# logs & uploads
+*.log
+uploads/
+backend/src/uploads/
+
+# personal / thesis / notes (do not ship)
+docs/
+scripts/
+*.docx
+*.doc
+_*.txt
+启动.txt
+**/changes.md
+**/security-cases.md
+
+# docker local overrides
+docker-compose.override.yml

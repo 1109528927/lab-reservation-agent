@@ -1,0 +1,73 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: lab-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
+      MYSQL_DATABASE: lab_access
+      TZ: Asia/Shanghai
+    ports:
+      - "3306:3306"
+    volumes:
+      - lab_mysql_data:/var/lib/mysql
+      - ./backend/sql/01_init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+      - ./backend/sql/02_seed_demo.sql:/docker-entrypoint-initdb.d/02_seed_demo.sql:ro
+      - ./backend/sql/03_access.sql:/docker-entrypoint-initdb.d/03_access.sql:ro
+      - ./backend/sql/04_access_device.sql:/docker-entrypoint-initdb.d/04_access_device.sql:ro
+      - ./backend/sql/04_device.sql:/docker-entrypoint-initdb.d/05_device.sql:ro
+      - ./backend/sql/05_ops.sql:/docker-entrypoint-initdb.d/06_ops.sql:ro
+      - ./backend/sql/05_schedule_block.sql:/docker-entrypoint-initdb.d/07_schedule_block.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-123456}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    container_name: lab-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: lab-reservation-agent-backend:latest
+    container_name: lab-backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: mysql+aiomysql://root:${MYSQL_ROOT_PASSWORD:-123456}@mysql:3306/lab_access?charset=utf8mb4
+      REDIS_URL: redis://redis:6379/0
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      LLM_MODEL: ${LLM_MODEL:-qwen-plus}
+    ports:
+      - "8000:8000"
+
+  front:
+    build:
+      context: ./front
+      dockerfile: Dockerfile
+    image: lab-reservation-agent-front:latest
+    container_name: lab-front
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+
+volumes:
+  lab_mysql_data:
