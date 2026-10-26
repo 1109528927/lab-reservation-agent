@@ -3,10 +3,15 @@ services:
     image: mysql:8.0
     container_name: lab-mysql
     restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --character-set-client-handshake=FALSE
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
       MYSQL_DATABASE: lab_access
       TZ: Asia/Shanghai
+      LANG: C.UTF-8
     ports:
       - "3306:3306"
     volumes:
