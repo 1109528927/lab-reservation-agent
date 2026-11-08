@@ -2,6 +2,14 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request, { getErrorMessage } from '@/utils/request'
+import { labStatusLabel, reservationStatusLabel } from '@/utils/labels'
+import {
+  MAX_RESERVE_HOURS,
+  computeFreeSlots,
+  defaultEndAfterStart,
+  disablePastDate,
+  validateReserveRange
+} from '@/utils/reserveTime'
 
 const loading = ref(false)
 const items = ref([])
@@ -134,6 +142,48 @@ const toggleClose = async (row) => {
   }
 }
 
+const freeSlots = computed(() =>
+  computeFreeSlots({
+    date: reserveForm.date || occupancyDate.value,
+    schedule: occupancy.value.schedule,
+    reservations: occupancy.value.reservations
+  })
+)
+
+const onStartChange = (v) => {
+  reserveForm.start = v || ''
+  if (!reserveForm.start) {
+    reserveForm.end = ''
+    return
+  }
+  if (!reserveForm.end || reserveForm.end <= reserveForm.start) {
+    reserveForm.end = defaultEndAfterStart(reserveForm.start)
+  } else {
+    const check = validateReserveRange({
+      date: reserveForm.date || occupancyDate.value,
+      start: reserveForm.start,
+      end: reserveForm.end
+    })
+    if (!check.ok && check.message.includes('最长')) {
+      reserveForm.end = defaultEndAfterStart(reserveForm.start)
+    }
+  }
+}
+
+const applyDefaultIfEmpty = () => {
+  const win = freeSlots.value.windows?.[0]
+  if (!win) {
+    if (!reserveForm.start) reserveForm.start = ''
+    if (!reserveForm.end) reserveForm.end = ''
+    return
+  }
+  if (!reserveForm.start || !reserveForm.end) {
+    reserveForm.start = win.start
+    reserveForm.end = defaultEndAfterStart(win.start)
+    if (reserveForm.end > win.end) reserveForm.end = win.end
+  }
+}
+
 const loadOccupancy = async (labId, dateStr) => {
   if (!labId || !dateStr) {
     occupancy.value = { schedule: [], reservations: [] }
@@ -147,8 +197,11 @@ const loadOccupancy = async (labId, dateStr) => {
       schedule: res.data?.data?.schedule || [],
       reservations: res.data?.data?.reservations || []
     }
+    applyDefaultIfEmpty()
   } catch {
     occupancy.value = { schedule: [], reservations: [] }
+    reserveForm.start = ''
+    reserveForm.end = ''
   }
 }
 
@@ -164,44 +217,29 @@ const openReserve = async (row) => {
   const p = (n) => String(n).padStart(2, '0')
   const day = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
   reserveForm.date = day
-  reserveForm.start = '14:00'
-  reserveForm.end = '16:00'
+  reserveForm.start = ''
+  reserveForm.end = ''
   occupancyDate.value = day
   reserveDialog.value = true
   await loadOccupancy(row.id, occupancyDate.value)
 }
 
-const setQuickSlot = (which) => {
-  if (!reserveForm.date) {
-    const d = new Date()
-    const p = (n) => String(n).padStart(2, '0')
-    reserveForm.date = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-  }
-  occupancyDate.value = reserveForm.date
-  const slots = {
-    am: ['08:00', '11:30'],
-    pm: ['14:00', '17:30'],
-    eve: ['18:30', '21:00'],
-    h2: ['14:00', '16:00']
-  }
-  const [a, b] = slots[which] || slots.h2
-  reserveForm.start = a
-  reserveForm.end = b
-  loadOccupancy(reserveForm.lab_id, reserveForm.date)
-}
-
 
 
 const submitReserve = async () => {
-  const range = buildReserveRange()
-  if (!reserveForm.lab_id || !range) {
-    ElMessage.warning('请选择日期与起止时间')
+  if (!reserveForm.lab_id) {
+    ElMessage.warning('请选择实验室')
     return
   }
-  if (range[1] <= range[0]) {
-    ElMessage.warning('结束时间须晚于开始时间')
+  const check = validateReserveRange({
+    ...reserveForm,
+    busy: freeSlots.value.busy
+  })
+  if (!check.ok) {
+    ElMessage.warning(check.message)
     return
   }
+  const range = check.range
   try {
     const res = await request.post('/api/reservations', {
       lab_id: reserveForm.lab_id,
@@ -262,7 +300,9 @@ onMounted(load)
       <el-table-column prop="name" label="名称" min-width="140" />
       <el-table-column prop="location" label="位置" min-width="140" />
       <el-table-column prop="capacity" label="容量" width="80" />
-      <el-table-column prop="status" label="状态" width="90" />
+      <el-table-column label="状态" width="90">
+        <template #default="{ row }">{{ labStatusLabel(row.status) }}</template>
+      </el-table-column>
 
       <el-table-column label="操作" :width="isAdmin ? 220 : 100" fixed="right">
         <template #default="{ row }">
@@ -319,7 +359,7 @@ onMounted(load)
     <el-dialog v-model="reserveDialog" :title="`预约 · ${reserveForm.lab_name}`" width="520px">
       <div class="occ">
         <div class="occ-t">
-          {{ occupancyDate }} 占用
+          {{ occupancyDate }} 已占用（自动排除）
           <el-button
             link
             type="primary"
@@ -328,16 +368,9 @@ onMounted(load)
             刷新
           </el-button>
         </div>
-        <div v-if="!occupancy.schedule.length && !occupancy.reservations.length" class="occ-empty">
-          当天暂无排课/预约
-        </div>
-        <div v-for="s in occupancy.schedule" :key="'s' + s.id" class="occ-row sch">
-          排课 {{ String(s.start_time).slice(11, 16) }}-{{ String(s.end_time).slice(11, 16) }}
-          《{{ s.title }}》
-        </div>
-        <div v-for="r in occupancy.reservations" :key="'r' + r.id" class="occ-row res">
-          预约 {{ String(r.start_time).slice(11, 16) }}-{{ String(r.end_time).slice(11, 16) }}
-          {{ r.title }}（{{ r.status }}）
+        <div v-if="!freeSlots.busy.length" class="occ-empty">当天暂无排课/预约</div>
+        <div v-for="(b, i) in freeSlots.busy" :key="'b' + i" class="occ-row sch">
+          {{ b.display }}
         </div>
       </div>
       <el-form label-width="90px">
@@ -347,6 +380,7 @@ onMounted(load)
             type="date"
             placeholder="选一天"
             value-format="YYYY-MM-DD"
+            :disabled-date="disablePastDate"
             style="width: 100%"
             @change="
               (v) => {
@@ -356,31 +390,31 @@ onMounted(load)
             "
           />
         </el-form-item>
-        <el-form-item label="快捷">
-          <el-button size="small" @click="setQuickSlot('am')">上午 08:00-11:30</el-button>
-          <el-button size="small" @click="setQuickSlot('pm')">下午 14:00-17:30</el-button>
-          <el-button size="small" @click="setQuickSlot('eve')">晚上 18:30-21:00</el-button>
-          <el-button size="small" @click="setQuickSlot('h2')">两小时 14:00-16:00</el-button>
-        </el-form-item>
-        <el-form-item label="开始时间">
-          <el-time-select
-            v-model="reserveForm.start"
-            start="08:00"
-            step="00:30"
-            end="21:30"
-            placeholder="几点开始"
-            style="width: 100%"
-          />
-        </el-form-item>
-        <el-form-item label="结束时间">
-          <el-time-select
-            v-model="reserveForm.end"
-            start="08:30"
-            step="00:30"
-            end="22:00"
-            placeholder="几点结束"
-            style="width: 100%"
-          />
+        <el-form-item :label="`时段(≤${MAX_RESERVE_HOURS}h)`">
+          <div v-if="freeSlots.windows?.length" class="occ-empty" style="margin-bottom: 6px">
+            当日空闲：{{ freeSlots.windows.map((w) => w.label).join('、') }}
+          </div>
+          <div v-else class="occ-empty" style="margin-bottom: 6px">该日已无可约空闲</div>
+          <div class="time-row">
+            <el-time-select
+              :model-value="reserveForm.start"
+              start="08:00"
+              step="00:10"
+              end="21:50"
+              placeholder="开始"
+              style="width: 100%"
+              @update:model-value="onStartChange"
+            />
+            <el-time-select
+              v-model="reserveForm.end"
+              start="08:10"
+              step="00:10"
+              end="22:00"
+              :min-time="reserveForm.start || '08:00'"
+              placeholder="结束"
+              style="width: 100%"
+            />
+          </div>
         </el-form-item>
         <el-form-item label="用途">
           <el-input v-model="reserveForm.purpose" placeholder="课程实验 / 项目调试等" />
@@ -433,5 +467,11 @@ onMounted(load)
 }
 .occ-row.res {
   color: #409eff;
+}
+.time-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  width: 100%;
 }
 </style>

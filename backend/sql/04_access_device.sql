@@ -14,11 +14,19 @@ CREATE TABLE IF NOT EXISTS `access_device` (
   CONSTRAINT `fk_dev_lab` FOREIGN KEY (`lab_id`) REFERENCES `lab` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- 演示：两间实验室各绑一台模拟门（真机换成 ESP32 的 device_id）
+-- 演示：每间开放实验室各绑一台模拟门（真机换成 ESP32 的 device_id）
 INSERT INTO access_device (device_id, lab_id, name, status)
 SELECT 'DOOR-LAB-1', id, CONCAT(name, '门口'), 'active' FROM lab WHERE id = 1
 ON DUPLICATE KEY UPDATE lab_id=VALUES(lab_id), name=VALUES(name);
 
 INSERT INTO access_device (device_id, lab_id, name, status)
 SELECT 'DOOR-LAB-2', id, CONCAT(name, '门口'), 'active' FROM lab WHERE id = 2
+ON DUPLICATE KEY UPDATE lab_id=VALUES(lab_id), name=VALUES(name);
+
+INSERT INTO access_device (device_id, lab_id, name, status)
+SELECT 'DOOR-LAB-3', id, CONCAT(name, '门口'), 'active' FROM lab WHERE id = 3
+ON DUPLICATE KEY UPDATE lab_id=VALUES(lab_id), name=VALUES(name);
+
+INSERT INTO access_device (device_id, lab_id, name, status)
+SELECT 'DOOR-LAB-4', id, CONCAT(name, '门口'), 'active' FROM lab WHERE id = 4
 ON DUPLICATE KEY UPDATE lab_id=VALUES(lab_id), name=VALUES(name);

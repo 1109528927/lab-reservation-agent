@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import QRCode from 'qrcode'
 import PasscodeQrDialog from '@/components/PasscodeQrDialog.vue'
 import request, { getErrorMessage } from '@/utils/request'
+import { formatDateTime, passcodeStatusLabel } from '@/utils/labels'
 
 const items = ref([])
 const loading = ref(false)
@@ -69,7 +70,7 @@ onMounted(load)
       向门禁出示下方<strong>二维码</strong>（内容即通行字符串）。领码时会弹出大图提示截图；也可点卡片再次打开。
       首次刷码成功后「消息」会提示「已扫码完成」；<strong>有效期内仍可再用</strong>。
     </div>
-    <div v-if="!items.length" class="empty card">暂无通行码，请先在「预约」里签须知并领码</div>
+    <div v-if="!items.length" class="empty card">暂无通行码，请先在「预约」里点「领通行码」</div>
     <div v-for="p in items" :key="p.id" class="card" @click="openDlg(p)">
       <div v-if="(p.scan_ok_count || 0) > 0" class="badge">已扫码 {{ p.scan_ok_count }} 次 · 有效期内可再用</div>
       <div v-if="p.lab_name" class="lab">{{ p.lab_name }}<span v-if="p.lab_location"> · {{ p.lab_location }}</span></div>
@@ -78,8 +79,8 @@ onMounted(load)
         <div v-else class="qr-ph">生成中…</div>
       </div>
       <div class="code">{{ p.code }}</div>
-      <div class="meta">预约 #{{ p.reservation_id }} · {{ p.status }}</div>
-      <div class="meta">{{ p.valid_from }} ~ {{ p.valid_to }}</div>
+      <div class="meta">预约 #{{ p.reservation_id }} · {{ passcodeStatusLabel(p.status) }}</div>
+      <div class="meta">{{ formatDateTime(p.valid_from) }} ~ {{ formatDateTime(p.valid_to) }}</div>
       <div v-if="p.last_allowed_at" class="meta ok">最近成功：{{ p.last_allowed_at }}</div>
       <el-button type="success" plain style="width: 100%; margin-top: 10px" @click.stop="copy(p.code)">
         复制凭证码

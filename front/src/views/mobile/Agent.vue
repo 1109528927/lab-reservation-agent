@@ -1,8 +1,11 @@
 <script setup>
-import { nextTick, onMounted, ref } from 'vue'
+import { nextTick, onActivated, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import request, { getErrorMessage } from '@/utils/request'
-import { askAgentStream, warmupAgent } from '@/utils/agentStream'
+import { askAgentStream, getAgentThreadId, warmupAgent } from '@/utils/agentStream'
+import { loadLocalChat, saveLocalChat, scrubChatText } from '@/utils/chatPersist'
+
+defineOptions({ name: 'MobileAgent' })
 
 const input = ref('')
 const loading = ref(false)
@@ -12,26 +15,62 @@ const chatEl = ref(null)
 
 const scrollBottom = async () => {
   await nextTick()
-  if (chatEl.value) chatEl.value.scrollTop = chatEl.value.scrollHeight
+  const el = chatEl.value
+  if (!el) return
+  const pin = () => {
+    el.scrollTop = el.scrollHeight
+  }
+  pin()
+  // keep-alive 切回后布局未稳定，再补两次
+  requestAnimationFrame(pin)
+  setTimeout(pin, 50)
+  setTimeout(pin, 200)
 }
 
+watch(
+  messages,
+  (v) => saveLocalChat(v),
+  { deep: true }
+)
+
+const welcome = (deg) =>
+  deg
+    ? '助手降级中，仍可用下方预约/通行码功能。'
+    : '你好，我可以帮你查实验室、预约、看预约和通行码。'
+
 const loadStatus = async () => {
+  const cached = loadLocalChat()
+  if (cached?.length) {
+    messages.value = cached
+  }
+
   try {
     const res = await request.get('/api/agent/status')
     degraded.value = !!res.data?.data?.degraded
-    messages.value = [
-      {
-        role: 'assistant',
-        content: degraded.value
-          ? '助手降级中，仍可用下方预约/通行码功能。'
-          : '你好，我可以帮你查实验室、预约、看预约和通行码。'
-      }
-    ]
+
+    // 业务库按用户最近 100 条（重新登录也能看）
+    const hist = await request.get('/api/agent/history', { params: { limit: 100 } })
+    const items = hist.data?.data?.items || []
+    if (items.length) {
+      messages.value = items.map((m) => ({
+        role: m.role,
+        content: scrubChatText(m.content)
+      }))
+      saveLocalChat(messages.value)
+    } else if (!messages.value.length) {
+      messages.value = [{ role: 'assistant', content: welcome(degraded.value) }]
+    }
+    // 固定 thread，便于短期记忆与落库一致
+    getAgentThreadId()
+
     if (!degraded.value) warmupAgent().catch(() => {})
   } catch {
     degraded.value = true
-    messages.value = [{ role: 'assistant', content: '助手暂不可用，请用预约页操作。' }]
+    if (!messages.value.length) {
+      messages.value = [{ role: 'assistant', content: '助手暂不可用，请用预约页操作。' }]
+    }
   }
+  scrollBottom()
 }
 
 const send = async () => {
@@ -46,7 +85,7 @@ const send = async () => {
   try {
     const { degraded: deg } = await askAgentStream(text, {
       onDelta: (full) => {
-        reply.content = full
+        reply.content = scrubChatText(full)
         scrollBottom()
       },
       onMeta: (p) => {
@@ -55,16 +94,22 @@ const send = async () => {
     })
     if (deg) degraded.value = true
     if (!reply.content) reply.content = '无回复'
+    else reply.content = scrubChatText(reply.content)
   } catch (e) {
     ElMessage.error(getErrorMessage(e, '发送失败'))
     reply.content = reply.content || '发送失败，请稍后重试或用表单预约。'
   } finally {
     loading.value = false
+    saveLocalChat(messages.value)
     scrollBottom()
   }
 }
 
 onMounted(loadStatus)
+// 底部 Tab 用 keep-alive，切回助手页时需重新贴底
+onActivated(() => {
+  scrollBottom()
+})
 </script>
 
 <template>
@@ -74,15 +119,17 @@ onMounted(loadStatus)
       type="warning"
       :closable="false"
       title="助手降级：主业务仍可用"
-      style="margin-bottom: 10px"
+      class="alert"
     />
     <div ref="chatEl" class="chat">
-      <div v-for="(m, i) in messages" :key="i" class="bubble" :class="m.role">
-        {{ m.content }}<span
-          v-if="loading && i === messages.length - 1 && m.role === 'assistant'"
-          class="cursor"
-          >|</span
-        >
+      <div class="chat-inner">
+        <div v-for="(m, i) in messages" :key="i" class="bubble" :class="m.role">
+          {{ m.content }}<span
+            v-if="loading && i === messages.length - 1 && m.role === 'assistant'"
+            class="cursor"
+            >|</span
+          >
+        </div>
       </div>
     </div>
     <div class="composer">
@@ -100,7 +147,19 @@ onMounted(loadStatus)
 </template>
 
 <style scoped>
+.page {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 120px);
+}
+.alert {
+  margin-bottom: 10px;
+  flex: 0 0 auto;
+}
 .chat {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
   background: #fff;
   border-radius: 10px;
   padding: 12px;
@@ -109,11 +168,20 @@ onMounted(loadStatus)
   overflow-y: auto;
   margin-bottom: 10px;
 }
+.chat-inner {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.composer {
+  flex: 0 0 auto;
+}
 .bubble {
   max-width: 85%;
   padding: 8px 12px;
   border-radius: 10px;
-  margin-bottom: 8px;
   line-height: 1.5;
   font-size: 14px;
   white-space: pre-wrap;

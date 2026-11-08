@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import PasscodeQrDialog from '@/components/PasscodeQrDialog.vue'
 import request, { getErrorMessage } from '@/utils/request'
+import { formatDateTime, passcodeStatusLabel } from '@/utils/labels'
 
 const code = ref('')
 const deviceId = ref('')
@@ -115,9 +116,15 @@ onMounted(() => {
         <el-table-column prop="lab_name" label="实验室" min-width="120" />
         <el-table-column prop="lab_location" label="位置" min-width="100" />
         <el-table-column prop="reservation_id" label="预约ID" width="90" />
-        <el-table-column prop="status" label="状态" width="90" />
-        <el-table-column prop="valid_from" label="起" />
-        <el-table-column prop="valid_to" label="止" />
+        <el-table-column label="状态" width="90">
+          <template #default="{ row }">{{ passcodeStatusLabel(row.status) }}</template>
+        </el-table-column>
+        <el-table-column label="起" min-width="140">
+          <template #default="{ row }">{{ formatDateTime(row.valid_from) }}</template>
+        </el-table-column>
+        <el-table-column label="止" min-width="140">
+          <template #default="{ row }">{{ formatDateTime(row.valid_to) }}</template>
+        </el-table-column>
         <el-table-column label="操作" width="160">
           <template #default="{ row }">
             <el-button link type="success" @click="showQr(row)">二维码</el-button>

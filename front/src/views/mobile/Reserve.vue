@@ -1,9 +1,18 @@
 <script setup>
-import { nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import PasscodeQrDialog from '@/components/PasscodeQrDialog.vue'
+import ClaimPasscodeDialog from '@/components/ClaimPasscodeDialog.vue'
 import request, { getErrorMessage } from '@/utils/request'
+import { formatDateTime, reservationStatusLabel } from '@/utils/labels'
+import {
+  MAX_RESERVE_HOURS,
+  computeFreeSlots,
+  defaultEndAfterStart,
+  disablePastDate,
+  todayStr,
+  validateReserveRange
+} from '@/utils/reserveTime'
 
 const route = useRoute()
 const labs = ref([])
@@ -20,33 +29,66 @@ const form = reactive({
 
 const labName = (id) => labs.value.find((x) => x.id === id)?.name || id
 
-const today = () => {
-  const d = new Date()
-  const p = (n) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-}
+const today = () => todayStr()
 
-const padTime = (t) => {
-  if (!t) return ''
-  return t.length === 5 ? `${t}:00` : t
-}
+/** 占用接口 + 本人同实验室同日活跃预约，双重排除已占时段 */
+const freeSlots = computed(() => {
+  const date = form.date || today()
+  const labId = form.lab_id
+  const mineBusy = (mine.value || [])
+    .filter(
+      (r) =>
+        labId &&
+        r.lab_id === labId &&
+        ['pending', 'approved', 'in_use'].includes(r.status) &&
+        String(r.start_time || '').slice(0, 10) === date
+    )
+    .map((r) => ({
+      start_time: r.start_time,
+      end_time: r.end_time,
+      title: r.purpose || `预约#${r.id}`,
+      kind: 'reservation'
+    }))
+  return computeFreeSlots({
+    date,
+    schedule: occupancy.value.schedule,
+    reservations: [...(occupancy.value.reservations || []), ...mineBusy]
+  })
+})
 
-const buildRange = () => {
-  if (!form.date || !form.start || !form.end) return null
-  return [`${form.date}T${padTime(form.start)}`, `${form.date}T${padTime(form.end)}`]
-}
-
-const setQuickSlot = (which) => {
-  if (!form.date) form.date = today()
-  const slots = {
-    am: ['08:00', '11:30'],
-    pm: ['14:00', '17:30'],
-    eve: ['18:30', '21:00'],
-    h2: ['14:00', '16:00']
+const onStartChange = (v) => {
+  form.start = v || ''
+  if (!form.start) {
+    form.end = ''
+    return
   }
-  const [a, b] = slots[which] || slots.h2
-  form.start = a
-  form.end = b
+  if (!form.end || form.end <= form.start) {
+    form.end = defaultEndAfterStart(form.start)
+  } else {
+    const check = validateReserveRange({
+      date: form.date || today(),
+      start: form.start,
+      end: form.end
+    })
+    if (!check.ok && check.message.includes('最长')) {
+      form.end = defaultEndAfterStart(form.start)
+    }
+  }
+}
+
+const applyDefaultIfEmpty = () => {
+  const win = freeSlots.value.windows?.[0]
+  if (!win) {
+    if (!form.start) form.start = ''
+    if (!form.end) form.end = ''
+    return
+  }
+  if (!form.start || !form.end) {
+    form.start = win.start
+    form.end = defaultEndAfterStart(win.start)
+    // 默认结束不超过该空闲窗
+    if (form.end > win.end) form.end = win.end
+  }
 }
 
 const loadOccupancy = async () => {
@@ -63,8 +105,11 @@ const loadOccupancy = async () => {
       schedule: res.data?.data?.schedule || [],
       reservations: res.data?.data?.reservations || []
     }
+    applyDefaultIfEmpty()
   } catch {
     occupancy.value = { schedule: [], reservations: [] }
+    form.start = ''
+    form.end = ''
   }
 }
 
@@ -99,15 +144,19 @@ watch(
 
 
 const submit = async () => {
-  const range = buildRange()
-  if (!form.lab_id || !range) {
+  if (!form.lab_id) {
     ElMessage.warning('请选择实验室、日期与起止时间')
     return
   }
-  if (range[1] <= range[0]) {
-    ElMessage.warning('结束时间须晚于开始时间')
+  const check = validateReserveRange({
+    ...form,
+    busy: freeSlots.value.busy
+  })
+  if (!check.ok) {
+    ElMessage.warning(check.message)
     return
   }
+  const range = check.range
   try {
     const res = await request.post('/api/reservations', {
       lab_id: form.lab_id,
@@ -122,33 +171,12 @@ const submit = async () => {
   }
 }
 
-const ack = async (id) => {
-  try {
-    await request.post('/api/access/safety/ack', { reservation_id: id })
-    ElMessage.success('已签须知')
-  } catch (e) {
-    ElMessage.error(getErrorMessage(e, '签署失败'))
-  }
-}
+const claimDlg = ref(false)
+const claimResId = ref(null)
 
-const passDlg = ref(false)
-const passPayload = ref(null)
-
-const issue = async (id) => {
-  try {
-    const res = await request.post('/api/access/passcode/issue', { reservation_id: id })
-    const data = res.data?.data
-    if (data?.code) {
-      passPayload.value = data
-      await nextTick()
-      passDlg.value = true
-      ElMessage.success(res.data?.message || '已发码，请截图保存')
-    } else {
-      ElMessage.success(res.data?.message || '已发码')
-    }
-  } catch (e) {
-    ElMessage.error(getErrorMessage(e, '发码失败'))
-  }
+const openClaim = (id) => {
+  claimResId.value = id
+  claimDlg.value = true
 }
 
 const cancel = async (id) => {
@@ -166,22 +194,18 @@ onMounted(load)
 
 <template>
   <div v-loading="loading" class="page">
-    <PasscodeQrDialog v-model="passDlg" :passcode="passPayload" show-pass-link />
+    <ClaimPasscodeDialog
+      v-model="claimDlg"
+      :reservation-id="claimResId"
+      show-pass-link
+      @done="load"
+    />
     <div class="card">
       <div class="card-t">新建预约</div>
       <div class="occ">
-        <div class="label">当日占用</div>
-        <div v-if="!occupancy.schedule.length && !occupancy.reservations.length" class="empty">
-          暂无排课/预约
-        </div>
-        <div v-for="s in occupancy.schedule" :key="'s' + s.id" class="occ-line">
-          排课 {{ String(s.start_time).slice(11, 16) }}-{{ String(s.end_time).slice(11, 16) }}
-          《{{ s.title }}》
-        </div>
-        <div v-for="r in occupancy.reservations" :key="'r' + r.id" class="occ-line">
-          预约 {{ String(r.start_time).slice(11, 16) }}-{{ String(r.end_time).slice(11, 16) }}
-          （{{ r.status }}）
-        </div>
+        <div class="label">当前实验室当日已占用（可选时段已自动排除）</div>
+        <div v-if="!freeSlots.busy.length" class="empty">暂无排课/预约</div>
+        <div v-for="(b, i) in freeSlots.busy" :key="'b' + i" class="occ-line">{{ b.display }}</div>
       </div>
       <div class="field">
         <div class="label">实验室</div>
@@ -196,38 +220,35 @@ onMounted(load)
           type="date"
           placeholder="选一天"
           value-format="YYYY-MM-DD"
+          :disabled-date="disablePastDate"
           style="width: 100%"
         />
       </div>
       <div class="field">
-        <div class="label">快捷时段</div>
-        <div class="quick">
-          <el-button size="small" @click="setQuickSlot('am')">上午 08:00-11:30</el-button>
-          <el-button size="small" @click="setQuickSlot('pm')">下午 14:00-17:30</el-button>
-          <el-button size="small" @click="setQuickSlot('eve')">晚上 18:30-21:00</el-button>
-          <el-button size="small" @click="setQuickSlot('h2')">两小时 14:00-16:00</el-button>
+        <div class="label">
+          预约时段（自由选择，单次最长 {{ MAX_RESERVE_HOURS }} 小时，可另约续约）
         </div>
-      </div>
-      <div class="field time-row">
-        <div>
-          <div class="label">开始时间</div>
+        <div v-if="freeSlots.windows?.length" class="win-hint">
+          当日空闲：{{ freeSlots.windows.map((w) => w.label).join('、') }}
+        </div>
+        <div v-else class="empty">该日已无可约空闲</div>
+        <div class="time-row">
           <el-time-select
-            v-model="form.start"
+            :model-value="form.start"
             start="08:00"
-            step="00:30"
-            end="21:30"
-            placeholder="几点开始"
+            step="00:10"
+            end="21:50"
+            placeholder="开始"
             style="width: 100%"
+            @update:model-value="onStartChange"
           />
-        </div>
-        <div>
-          <div class="label">结束时间</div>
           <el-time-select
             v-model="form.end"
-            start="08:30"
-            step="00:30"
+            start="08:10"
+            step="00:10"
             end="22:00"
-            placeholder="几点结束"
+            :min-time="form.start || '08:00'"
+            placeholder="结束"
             style="width: 100%"
           />
         </div>
@@ -243,24 +264,17 @@ onMounted(load)
       <div class="card-t">我的预约</div>
       <div v-if="!mine.length" class="empty">暂无</div>
       <div v-for="r in mine" :key="r.id" class="item">
-        <div class="name">{{ labName(r.lab_id) }} · {{ r.status }}</div>
-        <div class="meta">{{ r.start_time }}</div>
-        <div class="meta">{{ r.end_time }}</div>
+        <div class="name">{{ labName(r.lab_id) }} · {{ reservationStatusLabel(r.status) }}</div>
+        <div class="meta">提交 {{ formatDateTime(r.create_at) }}</div>
+        <div class="meta">时段 {{ formatDateTime(r.start_time) }} ~ {{ formatDateTime(r.end_time) }}</div>
         <div class="ops">
           <el-button
             v-if="['approved', 'in_use'].includes(r.status)"
             size="small"
-            @click="ack(r.id)"
-          >
-            签须知
-          </el-button>
-          <el-button
-            v-if="['approved', 'in_use'].includes(r.status)"
-            size="small"
             type="success"
-            @click="issue(r.id)"
+            @click="openClaim(r.id)"
           >
-            领码
+            领通行码
           </el-button>
           <el-button
             v-if="['pending', 'approved', 'in_use'].includes(r.status)"
@@ -330,10 +344,11 @@ onMounted(load)
   color: #666;
   margin-top: 4px;
 }
-.quick {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+.win-hint {
+  font-size: 12px;
+  color: #67c23a;
+  margin-bottom: 8px;
+  line-height: 1.4;
 }
 .time-row {
   display: grid;

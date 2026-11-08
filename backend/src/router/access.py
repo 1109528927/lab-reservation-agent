@@ -25,10 +25,8 @@ from utils.roles import require_admin
 
 router = APIRouter(prefix="/api/access", tags=["access"])
 
-SAFETY_TEXT = (
-    "进入实验室须遵守安全规定：禁止违规用电、食品饮料远离设备、"
-    "离开前断电关窗。本人已阅读并同意上述须知。"
-)
+# 与 Agent Tool 共用同一份须知正文
+SAFETY_TEXT = access_crud.SAFETY_TEXT_V1
 
 
 async def _passcode_payload(

@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request, { getErrorMessage } from '@/utils/request'
+import { computeFreeSlots } from '@/utils/reserveTime'
 
 const loading = ref(false)
 const labs = ref([])
@@ -21,8 +22,40 @@ const form = reactive({
   range: [],
   note: ''
 })
+const dayOccupancy = ref({ schedule: [], reservations: [] })
 
 const labName = (id) => labs.value.find((x) => x.id === id)?.name || `#${id}`
+
+const freeSlots = computed(() =>
+  computeFreeSlots({
+    date: selectedDay.value,
+    schedule: dayOccupancy.value.schedule,
+    reservations: dayOccupancy.value.reservations
+  })
+)
+
+const loadDayOccupancy = async () => {
+  if (!form.lab_id || !selectedDay.value) {
+    dayOccupancy.value = { schedule: [], reservations: [] }
+    return
+  }
+  try {
+    const res = await request.get(`/api/labs/${form.lab_id}/day-occupancy`, {
+      params: { date: selectedDay.value }
+    })
+    dayOccupancy.value = {
+      schedule: res.data?.data?.schedule || [],
+      reservations: res.data?.data?.reservations || []
+    }
+  } catch {
+    dayOccupancy.value = { schedule: [], reservations: [] }
+  }
+}
+
+const pickFreeSlot = (slot) => {
+  const day = selectedDay.value
+  form.range = [`${day}T${slot.start}:00`, `${day}T${slot.end}:00`]
+}
 
 const monthRange = computed(() => {
   const d = month.value instanceof Date ? month.value : new Date(month.value)
@@ -71,7 +104,7 @@ const loadBlocks = async () => {
   }
 }
 
-const openDay = (day) => {
+const openDay = async (day) => {
   // el-calendar 可能传 Date 或 string
   const d = day instanceof Date ? day : new Date(day)
   const p = (n) => String(n).padStart(2, '0')
@@ -81,7 +114,15 @@ const openDay = (day) => {
   form.range = []
   form.note = ''
   dayDrawer.value = true
+  await loadDayOccupancy()
 }
+
+watch(
+  () => form.lab_id,
+  () => {
+    if (dayDrawer.value) loadDayOccupancy()
+  }
+)
 
 const addBlock = async () => {
   if (!form.lab_id || !form.title?.trim() || !form.range?.length || form.range.length < 2) {
@@ -222,24 +263,43 @@ onMounted(async () => {
       <div v-if="!dayBlocks.length" class="empty">当天暂无排课</div>
       <div v-for="b in dayBlocks" :key="b.id" class="block-row">
         <div>
-          <div class="t">{{ b.title }} · {{ labName(b.lab_id) }}</div>
-          <div class="m">{{ b.start_time }} ~ {{ b.end_time }}</div>
-          <div v-if="b.note" class="m">{{ b.note }}</div>
+          <div class="t">课程名：{{ b.title || '（未填写）' }}</div>
+          <div class="m">实验室：{{ labName(b.lab_id) }}</div>
+          <div class="m">时段：{{ b.start_time }} ~ {{ b.end_time }}</div>
+          <div class="m">备注：{{ b.note || '无' }}</div>
         </div>
         <el-button link type="danger" @click="removeBlock(b.id)">删除</el-button>
       </div>
 
-      <el-divider>临时补录</el-divider>
+      <el-divider>临时补录（新增一节，须填课程名）</el-divider>
       <el-form label-width="80px">
-        <el-form-item label="实验室">
+        <el-form-item label="实验室" required>
           <el-select v-model="form.lab_id" style="width: 100%">
             <el-option v-for="l in labs" :key="l.id" :label="l.name" :value="l.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="课程名">
-          <el-input v-model="form.title" />
+        <el-form-item label="课程名" required>
+          <el-input
+            v-model="form.title"
+            placeholder="必填，例如：计网实验（班级写备注）"
+            maxlength="200"
+            show-word-limit
+          />
         </el-form-item>
-        <el-form-item label="时段">
+        <el-form-item label="空闲段">
+          <div v-if="!freeSlots.free.length" class="empty">该实验室当日已无空闲</div>
+          <div v-else class="slot-wrap">
+            <el-button
+              v-for="s in freeSlots.free"
+              :key="s.label"
+              size="small"
+              @click="pickFreeSlot(s)"
+            >
+              {{ s.label }}
+            </el-button>
+          </div>
+        </el-form-item>
+        <el-form-item label="时段" required>
           <el-date-picker
             v-model="form.range"
             type="datetimerange"
@@ -248,7 +308,7 @@ onMounted(async () => {
           />
         </el-form-item>
         <el-form-item label="备注">
-          <el-input v-model="form.note" />
+          <el-input v-model="form.note" placeholder="可选，如班级：计科2301" />
         </el-form-item>
         <el-button type="primary" style="width: 100%" @click="addBlock">添加</el-button>
       </el-form>
@@ -365,6 +425,11 @@ onMounted(async () => {
 .empty {
   color: #999;
   margin-bottom: 12px;
+}
+.slot-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .hint {
   color: #666;

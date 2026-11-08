@@ -16,6 +16,8 @@ class Lab(Base):
     need_approve: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="open")
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    tags: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    equipment: Mapped[str | None] = mapped_column(String(500), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
         server_default=func.now(),

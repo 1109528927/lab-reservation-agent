@@ -29,8 +29,7 @@ const logout = () => {
 }
 
 const goManager = () => {
-  if (user.value.role === 'teacher') router.push('/manager/lab')
-  else router.push('/manager/home')
+  router.push('/manager/agent')
 }
 
 const refreshMe = async () => {

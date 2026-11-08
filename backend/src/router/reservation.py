@@ -1,4 +1,6 @@
 """预约路由（A1）：冲突检测 + 审批。"""
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,6 +38,10 @@ async def create_reservation(
             ),
         )
 
+    past_err = res_crud.assert_not_past_range(body.start_time, body.end_time)
+    if past_err:
+        raise HTTPException(status_code=400, detail=past_err)
+
     lab = await lab_crud.get_lab(db, body.lab_id)
     if not lab:
         raise HTTPException(status_code=404, detail="实验室不存在")
@@ -69,7 +75,7 @@ async def create_reservation(
             ),
         )
 
-    status = reservation_status_for_role(user.role)
+    status = reservation_status_for_role(user.role, lab.need_approve)
     row = await res_crud.create_reservation(
         db,
         lab_id=body.lab_id,
@@ -92,7 +98,11 @@ async def create_reservation(
     msg = (
         "预约已提交，等待管理员审核"
         if status == "pending"
-        else "预约已通过（老师/管理员可直接预约）"
+        else (
+            "预约已通过（免审实验室）"
+            if user.role == "student"
+            else "预约已通过（老师/管理员可直接预约）"
+        )
     )
     return success_response(message=msg, data=_dump(row))
 
@@ -114,8 +124,41 @@ async def list_reservations(
     user: User = Depends(get_current_user),
 ):
     require_school_admin(user)
+    # 拉待审前先清掉已过开始时间的 pending，避免过期单继续占「待审批」
+    if status is None or status == "pending":
+        await res_crud.expire_stale_pending(db)
     rows = await res_crud.list_all(db, status=status)
     return success_response(message="ok", data={"items": [_dump(x) for x in rows]})
+
+
+@router.post("/auto-process")
+async def auto_process(
+    limit: int = Query(default=5, ge=1, le=50),
+    dry_run: bool = Query(default=False),
+    user: User = Depends(get_current_user),
+):
+    """规则批量自动通过低风险待审单，不调用大模型。"""
+    require_school_admin(user)
+    from agent.approval import auto_process_pending
+
+    data = auto_process_pending(limit=limit, dry_run=dry_run)
+    msg = "演练完成" if dry_run else "规则自动审批完成"
+    return success_response(message=msg, data=data)
+
+
+@router.get("/{res_id}/rule-review")
+async def rule_review(
+    res_id: int,
+    user: User = Depends(get_current_user),
+):
+    """单条规则闸门预览，不改状态、不调大模型。"""
+    require_school_admin(user)
+    from agent.approval import review_one
+
+    data = review_one(res_id)
+    if not data.get("ok") and data.get("error") == "预约不存在":
+        raise HTTPException(status_code=404, detail="预约不存在")
+    return success_response(message="ok", data=data)
 
 
 @router.post("/{res_id}/approve")
@@ -125,11 +168,18 @@ async def approve(
     user: User = Depends(get_current_user),
 ):
     require_school_admin(user)
+    await res_crud.expire_stale_pending(db)
     row = await res_crud.get_reservation(db, res_id)
     if not row:
         raise HTTPException(status_code=404, detail="预约不存在")
     if row.status != "pending":
         raise HTTPException(status_code=400, detail=f"当前状态不可审批：{row.status}")
+    if row.start_time < datetime.now():
+        row.status = "expired"
+        row.reject_reason = res_crud.EXPIRED_PENDING_REASON
+        await db.commit()
+        await db.refresh(row)
+        raise HTTPException(status_code=400, detail="预约时段已过，已自动作废，无法通过")
     row.status = "approved"
     await db.flush()
     await ops_crud.create_message(

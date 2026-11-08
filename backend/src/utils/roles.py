@@ -16,8 +16,10 @@ def require_admin(user: User) -> None:
     require_school_admin(user)
 
 
-def reservation_status_for_role(role: str) -> str:
-    """学生预约一律待审；老师/管理员直接通过。"""
-    if role == "student":
-        return "pending"
-    return "approved"
+def reservation_status_for_role(role: str, need_approve: int | bool = 1) -> str:
+    """老师/管理员直通；学生仅当实验室 need_approve=0 时免审直通，否则 pending。"""
+    if role != "student":
+        return "approved"
+    if not int(need_approve or 0):
+        return "approved"
+    return "pending"

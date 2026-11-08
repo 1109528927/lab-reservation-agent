@@ -13,13 +13,21 @@ CREATE TABLE IF NOT EXISTS `access_device` (
   CONSTRAINT `fk_device_lab` FOREIGN KEY (`lab_id`) REFERENCES `lab` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- 演示：两间实验室各绑一台模拟设备（与种子实验室 id 对应，请按实际 lab.id 调整）
+-- 演示：开放实验室各绑一台模拟设备（与种子实验室 id 对应，请按实际 lab.id 调整）
 INSERT INTO access_device (device_id, lab_id, name, status)
 SELECT 'ESP32-LAB-1', id, '嵌入式实验室门禁', 'active' FROM lab WHERE name='嵌入式实验室 A'
 ON DUPLICATE KEY UPDATE lab_id=VALUES(lab_id), name=VALUES(name);
 
 INSERT INTO access_device (device_id, lab_id, name, status)
 SELECT 'ESP32-LAB-2', id, '网络实验室门禁', 'active' FROM lab WHERE name='网络实验室'
+ON DUPLICATE KEY UPDATE lab_id=VALUES(lab_id), name=VALUES(name);
+
+INSERT INTO access_device (device_id, lab_id, name, status)
+SELECT 'ESP32-LAB-3', id, '通风化学实验室门禁', 'active' FROM lab WHERE name='通风化学实验室'
+ON DUPLICATE KEY UPDATE lab_id=VALUES(lab_id), name=VALUES(name);
+
+INSERT INTO access_device (device_id, lab_id, name, status)
+SELECT 'ESP32-LAB-4', id, '电子创新实验室门禁', 'active' FROM lab WHERE name='电子创新实验室'
 ON DUPLICATE KEY UPDATE lab_id=VALUES(lab_id), name=VALUES(name);
 
 -- 兼容旧模拟门默认设备号：绑到网络实验室（可改）

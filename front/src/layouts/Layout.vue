@@ -11,7 +11,9 @@ import {
   Notebook,
   Bell,
   Tools,
-  Medal
+  Medal,
+  UserFilled,
+  Unlock
 } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 
@@ -104,7 +106,7 @@ watch(
           >
             待审 {{ pendingCount }}
           </el-button>
-          <el-button text type="success" @click="router.push('/m/home')">移动端</el-button>
+          <el-button text type="success" @click="router.push('/m/agent')">移动端助手</el-button>
           <span>{{ user.username || '用户' }}（{{ roleLabel }}）</span>
           <el-button text type="danger" :icon="SwitchButton" @click="logout">退出</el-button>
         </div>
@@ -112,6 +114,10 @@ watch(
       <el-container>
         <el-aside width="220px">
           <el-menu router style="height: 100%" :default-active="route.path">
+            <el-menu-item index="/manager/agent">
+              <el-icon><ChatDotRound /></el-icon>
+              <span>智能助手</span>
+            </el-menu-item>
             <el-menu-item v-if="isSchoolAdmin" index="/manager/home">
               <el-icon><icon-menu /></el-icon>
               <span>系统首页</span>
@@ -146,14 +152,22 @@ watch(
               <el-icon><Medal /></el-icon>
               <span>信用管理</span>
             </el-menu-item>
-            <el-menu-item index="/manager/agent">
-              <el-icon><ChatDotRound /></el-icon>
-              <span>智能助手</span>
+            <el-menu-item v-if="isSchoolAdmin" index="/manager/students">
+              <el-icon><UserFilled /></el-icon>
+              <span>学生账号</span>
+            </el-menu-item>
+            <el-menu-item v-if="isSchoolAdmin" index="/manager/password-requests">
+              <el-icon><Unlock /></el-icon>
+              <span>找回申请</span>
             </el-menu-item>
           </el-menu>
         </el-aside>
         <el-main>
-          <router-view />
+          <router-view v-slot="{ Component }">
+            <keep-alive :include="['ManagerAgent']">
+              <component :is="Component" />
+            </keep-alive>
+          </router-view>
         </el-main>
       </el-container>
     </el-container>

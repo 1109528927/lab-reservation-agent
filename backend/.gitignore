@@ -5,3 +5,6 @@ __pycache__/
 .env
 .idea/
 *.log
+
+data/faiss_lab/
+*.faiss

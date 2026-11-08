@@ -1,13 +1,65 @@
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from model.reservation import Reservation
 from model.schedule import LabScheduleBlock
 
 # 参与冲突判断的状态
 ACTIVE_STATUSES = ("pending", "approved", "in_use")
+
+EXPIRED_PENDING_REASON = "时段已过期，系统自动作废"
+# 单次预约最长时长；需要更久可紧接着再约下一段（不冲突即可续约）
+MAX_RESERVATION_HOURS = 2
+
+
+def assert_not_past_range(start_time: datetime, end_time: datetime, *, now: datetime | None = None) -> str | None:
+    """返回错误文案；通过则返回 None。含「未过期 + 单次≤2小时」。"""
+    now = now or datetime.now()
+    if end_time <= start_time:
+        return "结束时间必须晚于开始时间"
+    if start_time < now:
+        return "不能预约已过去的时段，请选择当前时间之后的开始时间"
+    hours = (end_time - start_time).total_seconds() / 3600.0
+    if hours > MAX_RESERVATION_HOURS + 1e-6:
+        return (
+            f"单次预约最长 {MAX_RESERVATION_HOURS} 小时；"
+            "若需更久，可在本段结束后另约下一段（时段不冲突即可续约）"
+        )
+    return None
+
+
+async def expire_stale_pending(
+    db: AsyncSession, *, now: datetime | None = None
+) -> int:
+    """待审单开始时间已过 → 标为 expired，并从待审批列表消失。"""
+    now = now or datetime.now()
+    result = await db.execute(
+        update(Reservation)
+        .where(
+            Reservation.status == "pending",
+            Reservation.start_time < now,
+        )
+        .values(status="expired", reject_reason=EXPIRED_PENDING_REASON)
+    )
+    await db.commit()
+    return int(result.rowcount or 0)
+
+
+def sync_expire_stale_pending(session: Session, *, now: datetime | None = None) -> int:
+    now = now or datetime.now()
+    result = session.execute(
+        update(Reservation)
+        .where(
+            Reservation.status == "pending",
+            Reservation.start_time < now,
+        )
+        .values(status="expired", reject_reason=EXPIRED_PENDING_REASON)
+    )
+    session.commit()
+    return int(result.rowcount or 0)
 
 
 async def find_conflict(
@@ -80,10 +132,11 @@ async def get_reservation(db: AsyncSession, res_id: int) -> Reservation | None:
 
 
 async def list_by_user(db: AsyncSession, user_id: int) -> list[Reservation]:
+    # 按操作/提交时间倒序（最新操作在前），不以预约时段排序
     stmt = (
         select(Reservation)
         .where(Reservation.user_id == user_id)
-        .order_by(Reservation.start_time.desc())
+        .order_by(Reservation.create_at.desc(), Reservation.id.desc())
     )
     return list((await db.execute(stmt)).scalars().all())
 

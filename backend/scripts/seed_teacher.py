@@ -1,8 +1,6 @@
 """确保演示老师账号存在：teacher / 123456"""
-import os
 import sys
 from pathlib import Path
-from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -13,30 +11,11 @@ USERNAME = "teacher"
 PASSWORD = "123456"
 EMPLOYEE_NO = "T10001"
 
-# 兼容本机与 Docker：优先 DATABASE_URL，否则 MYSQL_HOST
-_db = os.getenv("DATABASE_URL", "").replace("mysql+aiomysql://", "mysql://").replace(
-    "mysql+pymysql://", "mysql://"
-)
-if _db:
-    u = urlparse(_db)
-    _host = u.hostname or "localhost"
-    _user = u.username or "root"
-    _password = u.password or "123456"
-    _database = (u.path or "/lab_access").lstrip("/") or "lab_access"
-    _port = u.port or 3306
-else:
-    _host = os.getenv("MYSQL_HOST", "localhost")
-    _user = os.getenv("MYSQL_USER", "root")
-    _password = os.getenv("MYSQL_PASSWORD", "123456")
-    _database = os.getenv("MYSQL_DATABASE", "lab_access")
-    _port = int(os.getenv("MYSQL_PORT", "3306"))
-
 conn = pymysql.connect(
-    host=_host,
-    port=_port,
-    user=_user,
-    password=_password,
-    database=_database,
+    host="localhost",
+    user="root",
+    password="123456",
+    database="lab_access",
     charset="utf8mb4",
 )
 try:

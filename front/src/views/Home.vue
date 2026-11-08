@@ -17,7 +17,7 @@ const stats = ref(null)
 
 onMounted(async () => {
   if (isTeacher.value) {
-    router.replace('/manager/lab')
+    router.replace('/manager/agent')
     return
   }
   if (!isAdmin.value) return

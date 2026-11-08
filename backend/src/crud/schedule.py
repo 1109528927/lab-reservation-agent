@@ -227,13 +227,15 @@ def parse_excel_preview(
                 continue
             try:
                 lab_name = str(row[0]).strip()
-                title = str(row[1]).strip()
+                title = str(row[1] or "").strip()
                 weekday = int(row[2])
                 start_t = _parse_time(row[3])
                 end_t = _parse_time(row[4])
                 term_start = _parse_date(row[5])
                 term_end = _parse_date(row[6])
                 note = str(row[7]).strip() if len(row) > 7 and row[7] else None
+                if not title:
+                    raise ValueError("课程名不能为空")
                 if lab_name not in labs:
                     raise ValueError(f"实验室不存在: {lab_name}")
                 expanded = expand_weekly(
@@ -262,10 +264,12 @@ def parse_excel_preview(
                 continue
             try:
                 lab_name = str(row[0]).strip()
-                title = str(row[1]).strip()
+                title = str(row[1] or "").strip()
                 st = _parse_dt(row[2])
                 et = _parse_dt(row[3])
                 note = str(row[4]).strip() if len(row) > 4 and row[4] else None
+                if not title:
+                    raise ValueError("课程名不能为空")
                 if lab_name not in labs:
                     raise ValueError(f"实验室不存在: {lab_name}")
                 if et <= st:

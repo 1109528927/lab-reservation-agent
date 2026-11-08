@@ -1,10 +1,10 @@
 #pragma once
 
 // 端到端原型：手机热点 + 局域网。改成你电脑在热点里的地址。
-#define WIFI_SSID "YOUR_WIFI_SSID"
-#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+#define WIFI_SSID "HONOR 70 Pro"
+#define WIFI_PASSWORD "20040707"
 #define DEVICE_ID "DOOR-LAB-1"
-#define VERIFY_URL "http://192.168.1.100:8000/api/access/verify"
+#define VERIFY_URL "http://192.168.68.100:8000/api/access/verify"
 
 // 串口二维码扫码模块。RX 接模块 TX。兼容 GM65 等同款 TTL 模块。
 #define GM65_RX 18

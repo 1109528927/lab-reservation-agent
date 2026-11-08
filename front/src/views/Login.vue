@@ -1,24 +1,66 @@
 <script setup>
-import { reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Lock, User } from '@element-plus/icons-vue'
 import router from '@/router'
 import request, { getErrorMessage } from '@/utils/request'
 
-const isLogin = ref(true)
 const loading = ref(false)
 const form = reactive({
   username: '',
-  password: '',
-  repassword: '',
-  employee_no: ''
+  password: ''
 })
 
-const toggleMode = () => {
-  isLogin.value = !isLogin.value
-  form.password = ''
-  form.repassword = ''
+const adminQqEmail = ref('admin@qq.com')
+const forgotOpen = ref(false)
+const forgotLoading = ref(false)
+const forgot = reactive({
+  username: '',
+  employee_no: '',
+  contact: '',
+  reason: ''
+})
+
+const loadPasswordHelp = async () => {
+  try {
+    const res = await request.get('/api/user/password-help')
+    adminQqEmail.value = res.data?.data?.admin_qq_email || adminQqEmail.value
+  } catch {
+    /* 登录页兜底展示默认邮箱 */
+  }
 }
+
+const openForgot = () => {
+  forgot.username = form.username || ''
+  forgot.employee_no = ''
+  forgot.contact = ''
+  forgot.reason = '忘记密码，申请重置'
+  forgotOpen.value = true
+}
+
+const submitForgot = async () => {
+  if (!forgot.username.trim()) {
+    ElMessage.warning('请填写登录账号')
+    return
+  }
+  forgotLoading.value = true
+  try {
+    const res = await request.post('/api/user/forgot-password', {
+      username: forgot.username.trim(),
+      employee_no: forgot.employee_no.trim() || null,
+      contact: forgot.contact.trim() || null,
+      reason: forgot.reason.trim() || null
+    })
+    ElMessage.success(res.data?.message || '申请已提交')
+    forgotOpen.value = false
+  } catch (e) {
+    ElMessage.error(getErrorMessage(e, '提交失败'))
+  } finally {
+    forgotLoading.value = false
+  }
+}
+
+onMounted(loadPasswordHelp)
 
 const login = async () => {
   if (!form.username || !form.password) {
@@ -40,59 +82,14 @@ const login = async () => {
     localStorage.setItem('userInfo', JSON.stringify(body.data.user))
     ElMessage.success(body.message || '登录成功')
     const role = body.data.user?.role
-    // 学生 → 移动端；老师 → 实验室预约；学校管理 → 看板首页
-    if (role === 'admin') {
-      router.push('/manager/home')
-    } else if (role === 'teacher') {
-      router.push('/manager/lab')
+    // 按角色进入对应端；账号由管理端建档，使用默认密码登录
+    if (role === 'admin' || role === 'teacher') {
+      router.push('/manager/agent')
     } else {
-      router.push('/m/home')
+      router.push('/m/agent')
     }
-
   } catch (e) {
     ElMessage.error(getErrorMessage(e, '登录失败'))
-  } finally {
-    loading.value = false
-  }
-}
-
-const register = async () => {
-  if (!form.username?.trim() || !form.password) {
-    ElMessage.warning('请输入账号和密码')
-    return
-  }
-  if (form.password.length < 6) {
-    ElMessage.warning('密码至少 6 位')
-    return
-  }
-  if (!form.repassword) {
-    ElMessage.warning('请再次输入确认密码')
-    return
-  }
-  if (form.password !== form.repassword) {
-    ElMessage.warning('两次密码不一致')
-    return
-  }
-  loading.value = true
-  try {
-    const res = await request.post('/api/user/register', {
-      username: form.username.trim(),
-      password: form.password,
-      repassword: form.repassword,
-      employee_no: form.employee_no?.trim() || undefined
-    })
-
-    const body = res.data
-    if (body.code !== 200) {
-      ElMessage.error(body.message || '注册失败')
-      return
-    }
-    ElMessage.success(body.message || '注册成功，请登录')
-    isLogin.value = true
-    form.password = ''
-    form.repassword = ''
-  } catch (e) {
-    ElMessage.error(getErrorMessage(e, '注册失败'))
   } finally {
     loading.value = false
   }
@@ -102,8 +99,8 @@ const register = async () => {
 <template>
   <div class="login-container">
     <div class="box">
-      <h3>智能实验室预约通行 · {{ isLogin ? '登录' : '注册' }}</h3>
-      <el-form v-if="isLogin">
+      <h3>智能实验室预约通行 · 登录</h3>
+      <el-form @submit.prevent="login">
         <el-form-item>
           <el-input
             v-model="form.username"
@@ -120,6 +117,7 @@ const register = async () => {
             placeholder="请输入密码"
             :prefix-icon="Lock"
             show-password
+            @keyup.enter="login"
           />
         </el-form-item>
         <el-button
@@ -127,69 +125,45 @@ const register = async () => {
           type="primary"
           style="width: 100%"
           :loading="loading"
+          native-type="submit"
           @click="login"
         >
           登 录
         </el-button>
-        <div style="text-align: right; margin-top: 20px">
-          <a href="#" @click.prevent="toggleMode">还没有账号？请点击注册</a>
+        <div class="login-extra">
+          <a href="#" @click.prevent="openForgot">忘记密码？</a>
         </div>
-        <div class="entry-links">
-          <a href="#" @click.prevent="router.push('/m/home')">学生端（小程序态）</a>
-          <span>·</span>
-          <a href="#" @click.prevent="router.push('/manager/home')">管理端</a>
-        </div>
+        <p class="admin-mail">
+          管理员 QQ 邮箱：
+          <a :href="'mailto:' + adminQqEmail">{{ adminQqEmail }}</a>
+        </p>
       </el-form>
 
-      <el-form v-else>
-        <el-form-item>
-          <el-input
-            v-model="form.username"
-            size="large"
-            placeholder="请输入注册账号"
-            :prefix-icon="User"
-          />
-        </el-form-item>
-        <el-form-item>
-          <el-input
-            v-model="form.employee_no"
-            size="large"
-            placeholder="学号/工号（可空，自动生成）"
-          />
-        </el-form-item>
-        <el-form-item>
-          <el-input
-            v-model="form.password"
-            type="password"
-            size="large"
-            placeholder="请输入注册密码"
-            :prefix-icon="Lock"
-            show-password
-          />
-        </el-form-item>
-        <el-form-item>
-          <el-input
-            v-model="form.repassword"
-            type="password"
-            size="large"
-            placeholder="请重新输入注册密码"
-            :prefix-icon="Lock"
-            show-password
-          />
-        </el-form-item>
-        <el-button
-          size="large"
-          type="primary"
-          style="width: 100%"
-          :loading="loading"
-          @click="register"
-        >
-          注 册
-        </el-button>
-        <div style="text-align: right; margin-top: 20px">
-          <a href="#" @click.prevent="toggleMode">已有账号？请登录</a>
-        </div>
-      </el-form>
+      <el-dialog v-model="forgotOpen" title="忘记密码申请" width="400px" append-to-body>
+        <p class="forgot-tip">
+          可先邮件联系 <strong>{{ adminQqEmail }}</strong>，或在此提交申请由管理员重置密码。
+        </p>
+        <el-form label-position="top">
+          <el-form-item label="登录账号" required>
+            <el-input v-model="forgot.username" placeholder="你的账号" />
+          </el-form-item>
+          <el-form-item label="学号/工号（可选）">
+            <el-input v-model="forgot.employee_no" />
+          </el-form-item>
+          <el-form-item label="联系方式（手机/QQ，可选）">
+            <el-input v-model="forgot.contact" />
+          </el-form-item>
+          <el-form-item label="说明">
+            <el-input v-model="forgot.reason" type="textarea" rows="2" />
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="forgotOpen = false">取消</el-button>
+          <el-button type="primary" :loading="forgotLoading" @click="submitForgot">
+            提交申请
+          </el-button>
+        </template>
+      </el-dialog>
     </div>
   </div>
 </template>
@@ -224,16 +198,26 @@ const register = async () => {
 .box a:hover {
   text-decoration: underline;
 }
-.entry-links {
+.login-extra {
+  display: flex;
+  justify-content: flex-end;
   margin-top: 16px;
   font-size: 13px;
-  color: #909399;
-  display: flex;
-  justify-content: center;
-  gap: 8px;
 }
-.entry-links a {
-  color: #07c160;
+.admin-mail {
+  margin: 14px 0 0;
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.5;
+}
+.admin-mail a {
+  font-size: 12px;
+}
+.forgot-tip {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #606266;
+  text-align: left;
+  line-height: 1.5;
 }
 </style>
-

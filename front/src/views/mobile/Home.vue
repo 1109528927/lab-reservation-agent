@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import request from '@/utils/request'
+import { formatDateTime, reservationStatusLabel } from '@/utils/labels'
 
 const router = useRouter()
 const labs = ref([])
@@ -46,13 +47,13 @@ onMounted(async () => {
   <div class="page">
     <div class="hero">
       <div class="hi">你好，{{ user.username || '同学' }}</div>
-      <div class="tip">预约实验室 · 领取通行码 · 扫码通行</div>
+      <div class="tip">主入口在「助手」；本页与预约/通行码为降级备用</div>
     </div>
 
     <div class="grid">
-      <button class="cell" type="button" @click="goReserve()">去预约</button>
+      <button class="cell primary" type="button" @click="router.push('/m/agent')">智能助手</button>
+      <button class="cell" type="button" @click="goReserve()">表单预约</button>
       <button class="cell" type="button" @click="router.push('/m/pass')">我的通行码</button>
-      <button class="cell" type="button" @click="router.push('/m/agent')">智能助手</button>
       <button class="cell" type="button" @click="router.push('/m/scan')">模拟扫码</button>
     </div>
 
@@ -83,8 +84,9 @@ onMounted(async () => {
       <div v-if="!mine.length" class="empty">还没有预约</div>
       <div v-for="r in mine" :key="r.id" class="row">
         <div>
-          <div class="name">#{{ r.id }} · {{ r.status }}</div>
-          <div class="meta">{{ r.start_time }} ~ {{ r.end_time }}</div>
+          <div class="name">#{{ r.id }} · {{ reservationStatusLabel(r.status) }}</div>
+          <div class="meta">提交 {{ formatDateTime(r.create_at) }}</div>
+          <div class="meta">时段 {{ formatDateTime(r.start_time) }} ~ {{ formatDateTime(r.end_time) }}</div>
         </div>
       </div>
     </div>
@@ -123,6 +125,10 @@ onMounted(async () => {
   font-weight: 600;
   color: #333;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+.cell.primary {
+  background: #07c160;
+  color: #fff;
 }
 .card {
   background: #fff;

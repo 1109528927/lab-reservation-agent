@@ -1,8 +1,11 @@
 <script setup>
-import { nextTick, onMounted, ref } from 'vue'
+import { nextTick, onActivated, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import request, { getErrorMessage } from '@/utils/request'
-import { askAgentStream, warmupAgent } from '@/utils/agentStream'
+import { askAgentStream, getAgentThreadId, warmupAgent } from '@/utils/agentStream'
+import { loadLocalChat, saveLocalChat, scrubChatText } from '@/utils/chatPersist'
+
+defineOptions({ name: 'ManagerAgent' })
 
 const input = ref('')
 const loading = ref(false)
@@ -13,41 +16,74 @@ const chatEl = ref(null)
 
 const scrollBottom = async () => {
   await nextTick()
-  if (chatEl.value) chatEl.value.scrollTop = chatEl.value.scrollHeight
+  const el = chatEl.value
+  if (!el) return
+  const pin = () => {
+    el.scrollTop = el.scrollHeight
+  }
+  pin()
+  requestAnimationFrame(pin)
+  setTimeout(pin, 50)
+  setTimeout(pin, 200)
 }
 
-const pushAssistant = (content) => {
-  messages.value.push({ role: 'assistant', content })
-  scrollBottom()
-}
+watch(
+  messages,
+  (v) => saveLocalChat(v),
+  { deep: true }
+)
 
 const loadStatus = async () => {
+  const cached = loadLocalChat()
+  if (cached?.length) messages.value = cached
+
   try {
     const res = await request.get('/api/agent/status')
     const d = res.data?.data || {}
     degraded.value = !!d.degraded
-    if (d.degraded) {
-      statusText.value =
-        '助手当前为降级模式：大模型未就绪。预约管理、模拟门禁可照常演示。'
-      pushAssistant(statusText.value)
-    } else {
-      statusText.value = '助手预热中，稍后再提问会更快出第一个字'
-      pushAssistant('你好。我正在准备模型连接，你可以直接提问。')
-      warmupAgent()
-        .then((d) => {
-          statusText.value = d.warm
-            ? '助手已预热。核心 Tool：查实验室 / 预约 / 我的预约 / 通行码'
-            : '助手可用。核心 Tool：查实验室 / 预约 / 我的预约 / 通行码'
-        })
-        .catch(() => {
-          statusText.value = '助手可用。核心 Tool：查实验室 / 预约 / 我的预约 / 通行码'
-        })
+
+    getAgentThreadId()
+    const hist = await request.get('/api/agent/history', { params: { limit: 100 } })
+    const items = hist.data?.data?.items || []
+    if (items.length) {
+      messages.value = items.map((m) => ({
+        role: m.role,
+        content: scrubChatText(m.content)
+      }))
+      saveLocalChat(messages.value)
+      statusText.value = degraded.value
+        ? '助手降级中；主业务菜单仍可用。'
+        : `已加载最近 ${items.length} 条聊天记录`
+    } else if (!messages.value.length) {
+      if (d.degraded) {
+        statusText.value =
+          '助手当前为降级模式：大模型未就绪。预约管理、模拟门禁可照常演示。'
+        messages.value = [{ role: 'assistant', content: statusText.value }]
+      } else {
+        statusText.value = '助手预热中，稍后再提问会更快出第一个字'
+        messages.value = [{ role: 'assistant', content: '你好。我正在准备模型连接，你可以直接提问。' }]
+        warmupAgent()
+          .then((w) => {
+            statusText.value = w.warm
+              ? '助手已预热。核心 Tool：查实验室 / 预约 / 我的预约 / 通行码'
+              : '助手可用。核心 Tool：查实验室 / 预约 / 我的预约 / 通行码'
+          })
+          .catch(() => {
+            statusText.value = '助手可用。核心 Tool：查实验室 / 预约 / 我的预约 / 通行码'
+          })
+      }
+    } else if (!d.degraded) {
+      warmupAgent().catch(() => {})
+      statusText.value = '已恢复本会话聊天记录'
     }
   } catch {
     degraded.value = true
     statusText.value = '无法连接助手接口；主业务菜单不受影响。'
-    pushAssistant(statusText.value)
+    if (!messages.value.length) {
+      messages.value = [{ role: 'assistant', content: statusText.value }]
+    }
   }
+  scrollBottom()
 }
 
 const send = async () => {
@@ -62,7 +98,7 @@ const send = async () => {
   try {
     const { degraded: deg } = await askAgentStream(text, {
       onDelta: (full) => {
-        reply.content = full
+        reply.content = scrubChatText(full)
         scrollBottom()
       },
       onMeta: (p) => {
@@ -71,17 +107,22 @@ const send = async () => {
     })
     if (deg) degraded.value = true
     if (!reply.content) reply.content = '无回复'
+    else reply.content = scrubChatText(reply.content)
   } catch (e) {
     degraded.value = true
     ElMessage.error(getErrorMessage(e, '助手暂不可用'))
     reply.content = reply.content || '助手调用失败。请改用「预约管理 / 模拟门禁」完成操作。'
   } finally {
     loading.value = false
+    saveLocalChat(messages.value)
     scrollBottom()
   }
 }
 
 onMounted(loadStatus)
+onActivated(() => {
+  scrollBottom()
+})
 </script>
 
 <template>
@@ -92,60 +133,78 @@ onMounted(loadStatus)
       :closable="false"
       :title="statusText"
       description="回答经 LangGraph messages 流式推送；前端按 token 背压出字，不是先拿全文再 setInterval。"
-      show-icon
       style="margin-bottom: 12px"
     />
     <div ref="chatEl" class="chat">
-      <div v-for="(m, i) in messages" :key="i" class="row" :class="m.role">
-        <span class="tag">{{ m.role === 'user' ? '我' : '助手' }}</span>
-        <span class="plain">{{ m.content }}<span v-if="loading && i === messages.length - 1 && m.role === 'assistant'" class="cursor">|</span></span>
+      <div class="chat-inner">
+        <div v-for="(m, i) in messages" :key="i" class="row" :class="m.role">
+          <span class="tag">{{ m.role === 'user' ? '我' : '助手' }}</span>
+          <span class="plain"
+            >{{ m.content
+            }}<span
+              v-if="loading && i === messages.length - 1 && m.role === 'assistant'"
+              class="cursor"
+              >|</span
+            ></span
+          >
+        </div>
       </div>
     </div>
-    <div class="composer">
-      <el-input
-        v-model="input"
-        type="textarea"
-        :rows="2"
-        placeholder="例如：明天下午有哪些实验室可以预约？"
-        @keydown.ctrl.enter="send"
-      />
-      <el-button type="primary" :loading="loading" style="margin-top: 8px" @click="send">
-        发送
-      </el-button>
-    </div>
+    <el-input
+      v-model="input"
+      type="textarea"
+      :rows="3"
+      placeholder="例如：明天下午有哪些实验室可以预约？"
+    />
+    <el-button type="primary" :loading="loading" style="margin-top: 8px" @click="send">
+      发送
+    </el-button>
   </div>
 </template>
 
 <style scoped>
+.wrap {
+  max-width: 860px;
+}
 .chat {
-  background: #fff;
+  display: flex;
+  flex-direction: column;
+  background: #fafafa;
   border: 1px solid #ebeef5;
-  min-height: 320px;
-  max-height: 480px;
-  overflow-y: auto;
+  border-radius: 8px;
   padding: 12px;
+  min-height: 320px;
+  max-height: 52vh;
+  overflow-y: auto;
   margin-bottom: 12px;
 }
-.row {
-  margin-bottom: 10px;
-  line-height: 1.5;
+.chat-inner {
+  margin-top: auto;
+  width: 100%;
 }
-.row.user {
-  text-align: right;
+.row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+  line-height: 1.55;
+}
+.row.user .plain {
+  background: #ecf5ff;
 }
 .tag {
-  display: inline-block;
-  margin-right: 6px;
+  flex: 0 0 36px;
   color: #909399;
-  font-size: 12px;
+  font-size: 13px;
 }
 .plain {
+  flex: 1;
   white-space: pre-wrap;
-  word-break: break-word;
+  background: #fff;
+  border-radius: 6px;
+  padding: 8px 10px;
+  border: 1px solid #ebeef5;
 }
 .cursor {
-  display: inline-block;
-  margin-left: 1px;
   color: #409eff;
   font-weight: bold;
   animation: blink 1s infinite;
@@ -159,8 +218,5 @@ onMounted(loadStatus)
   100% {
     opacity: 0;
   }
-}
-.composer {
-  max-width: 720px;
 }
 </style>

@@ -2,8 +2,17 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import PasscodeQrDialog from '@/components/PasscodeQrDialog.vue'
+import ClaimPasscodeDialog from '@/components/ClaimPasscodeDialog.vue'
 import request, { getErrorMessage } from '@/utils/request'
+import { formatDateTime, reservationStatusLabel } from '@/utils/labels'
+import {
+  MAX_RESERVE_HOURS,
+  computeFreeSlots,
+  defaultEndAfterStart,
+  disablePastDate,
+  todayStr,
+  validateReserveRange
+} from '@/utils/reserveTime'
 
 const route = useRoute()
 const loading = ref(false)
@@ -21,28 +30,62 @@ const form = reactive({
 const occupancy = ref({ schedule: [], reservations: [] })
 const occupancyDate = ref('')
 
-const padTime = (t) => (t && t.length === 5 ? `${t}:00` : t || '')
-const buildRange = () => {
-  if (!form.date || !form.start || !form.end) return null
-  return [`${form.date}T${padTime(form.start)}`, `${form.date}T${padTime(form.end)}`]
+const freeSlots = computed(() => {
+  const date = form.date || occupancyDate.value
+  const labId = form.lab_id
+  const mineBusy = (mine.value || [])
+    .filter(
+      (r) =>
+        labId &&
+        r.lab_id === labId &&
+        ['pending', 'approved', 'in_use'].includes(r.status) &&
+        String(r.start_time || '').slice(0, 10) === date
+    )
+    .map((r) => ({
+      start_time: r.start_time,
+      end_time: r.end_time,
+      title: r.purpose || `预约#${r.id}`,
+      kind: 'reservation'
+    }))
+  return computeFreeSlots({
+    date,
+    schedule: occupancy.value.schedule,
+    reservations: [...(occupancy.value.reservations || []), ...mineBusy]
+  })
+})
+
+const onStartChange = (v) => {
+  form.start = v || ''
+  if (!form.start) {
+    form.end = ''
+    return
+  }
+  if (!form.end || form.end <= form.start) {
+    form.end = defaultEndAfterStart(form.start)
+  } else {
+    const check = validateReserveRange({
+      date: form.date || occupancyDate.value,
+      start: form.start,
+      end: form.end
+    })
+    if (!check.ok && check.message.includes('最长')) {
+      form.end = defaultEndAfterStart(form.start)
+    }
+  }
 }
-const setQuickSlot = (which) => {
-  if (!form.date) {
-    const d = new Date()
-    const p = (n) => String(n).padStart(2, '0')
-    form.date = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+
+const applyDefaultIfEmpty = () => {
+  const win = freeSlots.value.windows?.[0]
+  if (!win) {
+    if (!form.start) form.start = ''
+    if (!form.end) form.end = ''
+    return
   }
-  occupancyDate.value = form.date
-  const slots = {
-    am: ['08:00', '11:30'],
-    pm: ['14:00', '17:30'],
-    eve: ['18:30', '21:00'],
-    h2: ['14:00', '16:00']
+  if (!form.start || !form.end) {
+    form.start = win.start
+    form.end = defaultEndAfterStart(win.start)
+    if (form.end > win.end) form.end = win.end
   }
-  const [a, b] = slots[which] || slots.h2
-  form.start = a
-  form.end = b
-  loadOccupancy()
 }
 
 const user = computed(() => {
@@ -69,8 +112,11 @@ const loadOccupancy = async () => {
       schedule: res.data?.data?.schedule || [],
       reservations: res.data?.data?.reservations || []
     }
+    applyDefaultIfEmpty()
   } catch {
     occupancy.value = { schedule: [], reservations: [] }
+    form.start = ''
+    form.end = ''
   }
 }
 
@@ -109,11 +155,9 @@ const openCreate = async (preferLabId) => {
   form.lab_id =
     qid && labs.value.some((x) => x.id === qid) ? qid : labs.value[0]?.id || null
   form.purpose = ''
-  form.start = '14:00'
-  form.end = '16:00'
-  const d = new Date()
-  const p = (n) => String(n).padStart(2, '0')
-  form.date = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+  form.start = ''
+  form.end = ''
+  form.date = todayStr()
   occupancyDate.value = form.date
   dialog.value = true
   await loadOccupancy()
@@ -121,15 +165,19 @@ const openCreate = async (preferLabId) => {
 
 
 const submit = async () => {
-  const range = buildRange()
-  if (!form.lab_id || !range) {
+  if (!form.lab_id) {
     ElMessage.warning('请选择实验室、日期与起止时间')
     return
   }
-  if (range[1] <= range[0]) {
-    ElMessage.warning('结束时间须晚于开始时间')
+  const check = validateReserveRange({
+    ...form,
+    busy: freeSlots.value.busy
+  })
+  if (!check.ok) {
+    ElMessage.warning(check.message)
     return
   }
+  const range = check.range
   try {
     const res = await request.post('/api/reservations', {
       lab_id: form.lab_id,
@@ -155,6 +203,26 @@ const approve = async (id) => {
   }
 }
 
+/** 规则批量自动通过（不调用大模型） */
+const autoProcessRules = async (dryRun = false) => {
+  try {
+    const res = await request.post('/api/reservations/auto-process', null, {
+      params: { limit: 20, dry_run: dryRun }
+    })
+    const d = res.data?.data || {}
+    const n = (d.auto_approved || []).length
+    const h = (d.need_human || []).length
+    ElMessage.success(
+      dryRun
+        ? `演练：可自动通过 ${n} 条，需人工 ${h} 条`
+        : `规则自动通过 ${n} 条，仍待人工 ${h} 条`
+    )
+    if (!dryRun) load()
+  } catch (e) {
+    ElMessage.error(getErrorMessage(e, '规则自动审批失败'))
+  }
+}
+
 const reject = async (id) => {
   try {
     await request.post(`/api/reservations/${id}/reject`, { reason: '时段安排冲突或不符合规定' })
@@ -175,32 +243,12 @@ const cancel = async (id) => {
   }
 }
 
-const ackSafety = async (id) => {
-  try {
-    await request.post('/api/access/safety/ack', { reservation_id: id })
-    ElMessage.success('安全须知已签署')
-  } catch (e) {
-    ElMessage.error(getErrorMessage(e, '签署失败'))
-  }
-}
+const claimDlg = ref(false)
+const claimResId = ref(null)
 
-const passDlg = ref(false)
-const passPayload = ref(null)
-
-const issueCode = async (id) => {
-  try {
-    const res = await request.post('/api/access/passcode/issue', { reservation_id: id })
-    const data = res.data?.data
-    if (data?.code) {
-      passPayload.value = data
-      passDlg.value = true
-      ElMessage.success(res.data?.message || '已发码，请截图保存')
-    } else {
-      ElMessage.success(res.data?.message || '已发码')
-    }
-  } catch (e) {
-    ElMessage.error(getErrorMessage(e, '发码失败（请先签署须知）'))
-  }
+const openClaim = (id) => {
+  claimResId.value = id
+  claimDlg.value = true
 }
 
 onMounted(async () => {
@@ -211,11 +259,15 @@ onMounted(async () => {
 
 <template>
   <div v-loading="loading">
-    <PasscodeQrDialog v-model="passDlg" :passcode="passPayload" />
+    <ClaimPasscodeDialog v-model="claimDlg" :reservation-id="claimResId" @done="load" />
     <div class="bar">
       <h2>预约管理</h2>
       <div>
         <el-button @click="load">刷新</el-button>
+        <el-button v-if="isAdmin" @click="autoProcessRules(true)">规则演练</el-button>
+        <el-button v-if="isAdmin" type="success" @click="autoProcessRules(false)">
+          规则自动通过
+        </el-button>
         <el-button type="primary" @click="openCreate">新建预约</el-button>
       </div>
     </div>
@@ -225,25 +277,26 @@ onMounted(async () => {
       <el-table-column label="实验室" min-width="120">
         <template #default="{ row }">{{ labName(row.lab_id) }}</template>
       </el-table-column>
-      <el-table-column prop="start_time" label="开始" min-width="160" />
-      <el-table-column prop="end_time" label="结束" min-width="160" />
-      <el-table-column prop="status" label="状态" width="110" />
+      <el-table-column label="提交时间" min-width="150">
+        <template #default="{ row }">{{ formatDateTime(row.create_at) }}</template>
+      </el-table-column>
+      <el-table-column label="开始" min-width="150">
+        <template #default="{ row }">{{ formatDateTime(row.start_time) }}</template>
+      </el-table-column>
+      <el-table-column label="结束" min-width="150">
+        <template #default="{ row }">{{ formatDateTime(row.end_time) }}</template>
+      </el-table-column>
+      <el-table-column label="状态" width="110">
+        <template #default="{ row }">{{ reservationStatusLabel(row.status) }}</template>
+      </el-table-column>
       <el-table-column prop="purpose" label="用途" />
       <el-table-column label="操作" width="260">
         <template #default="{ row }">
           <el-button
             v-if="['approved', 'in_use'].includes(row.status)"
             link
-            type="primary"
-            @click="ackSafety(row.id)"
-          >
-            签须知
-          </el-button>
-          <el-button
-            v-if="['approved', 'in_use'].includes(row.status)"
-            link
             type="success"
-            @click="issueCode(row.id)"
+            @click="openClaim(row.id)"
           >
             领通行码
           </el-button>
@@ -280,18 +333,9 @@ onMounted(async () => {
 
     <el-dialog v-model="dialog" title="新建预约" width="520px">
       <div class="occ">
-        <div class="occ-t">{{ occupancyDate }} 占用</div>
-        <div v-if="!occupancy.schedule.length && !occupancy.reservations.length" class="occ-empty">
-          当天暂无排课/预约
-        </div>
-        <div v-for="s in occupancy.schedule" :key="'s' + s.id" class="occ-row sch">
-          排课 {{ String(s.start_time).slice(11, 16) }}-{{ String(s.end_time).slice(11, 16) }}
-          《{{ s.title }}》
-        </div>
-        <div v-for="r in occupancy.reservations" :key="'r' + r.id" class="occ-row res">
-          预约 {{ String(r.start_time).slice(11, 16) }}-{{ String(r.end_time).slice(11, 16) }}
-          {{ r.title }}（{{ r.status }}）
-        </div>
+        <div class="occ-t">{{ occupancyDate }} 已占用（自动排除）</div>
+        <div v-if="!freeSlots.busy.length" class="occ-empty">当天暂无排课/预约</div>
+        <div v-for="(b, i) in freeSlots.busy" :key="'b' + i" class="occ-row sch">{{ b.display }}</div>
       </div>
       <el-form label-width="90px">
         <el-form-item label="实验室">
@@ -310,6 +354,7 @@ onMounted(async () => {
             type="date"
             placeholder="选一天"
             value-format="YYYY-MM-DD"
+            :disabled-date="disablePastDate"
             style="width: 100%"
             @change="
               (v) => {
@@ -319,31 +364,31 @@ onMounted(async () => {
             "
           />
         </el-form-item>
-        <el-form-item label="快捷">
-          <el-button size="small" @click="setQuickSlot('am')">上午 08:00-11:30</el-button>
-          <el-button size="small" @click="setQuickSlot('pm')">下午 14:00-17:30</el-button>
-          <el-button size="small" @click="setQuickSlot('eve')">晚上 18:30-21:00</el-button>
-          <el-button size="small" @click="setQuickSlot('h2')">两小时 14:00-16:00</el-button>
-        </el-form-item>
-        <el-form-item label="开始时间">
-          <el-time-select
-            v-model="form.start"
-            start="08:00"
-            step="00:30"
-            end="21:30"
-            placeholder="几点开始"
-            style="width: 100%"
-          />
-        </el-form-item>
-        <el-form-item label="结束时间">
-          <el-time-select
-            v-model="form.end"
-            start="08:30"
-            step="00:30"
-            end="22:00"
-            placeholder="几点结束"
-            style="width: 100%"
-          />
+        <el-form-item :label="`时段(≤${MAX_RESERVE_HOURS}h)`">
+          <div v-if="freeSlots.windows?.length" class="occ-empty" style="margin-bottom: 6px">
+            当日空闲：{{ freeSlots.windows.map((w) => w.label).join('、') }}
+          </div>
+          <div v-else class="occ-empty" style="margin-bottom: 6px">该日已无可约空闲</div>
+          <div class="time-row">
+            <el-time-select
+              :model-value="form.start"
+              start="08:00"
+              step="00:10"
+              end="21:50"
+              placeholder="开始"
+              style="width: 100%"
+              @update:model-value="onStartChange"
+            />
+            <el-time-select
+              v-model="form.end"
+              start="08:10"
+              step="00:10"
+              end="22:00"
+              :min-time="form.start || '08:00'"
+              placeholder="结束"
+              style="width: 100%"
+            />
+          </div>
         </el-form-item>
         <el-form-item label="用途">
           <el-input v-model="form.purpose" placeholder="课程实验 / 项目调试等" />
@@ -390,5 +435,11 @@ h3 {
 }
 .occ-row.res {
   color: #409eff;
+}
+.time-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  width: 100%;
 }
 </style>

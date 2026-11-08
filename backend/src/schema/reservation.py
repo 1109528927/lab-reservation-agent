@@ -12,8 +12,11 @@ class ReservationCreate(BaseModel):
 
     @model_validator(mode="after")
     def check_range(self):
-        if self.end_time <= self.start_time:
-            raise ValueError("结束时间必须晚于开始时间")
+        from crud.reservation import assert_not_past_range
+
+        err = assert_not_past_range(self.start_time, self.end_time)
+        if err:
+            raise ValueError(err)
         return self
 
 

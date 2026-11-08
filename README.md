@@ -1,136 +1,93 @@
-# 智能实验室预约通行系统
+# 智能实验室预约通行系统 · Agent 主入口版
 
-Vue3 + FastAPI + MySQL + Redis + LangGraph Agent；门口可选 ESP32-S3 扫码通行。
+> **本目录是副本工程**（位于 `D:\全栈`）：从 `D:\edu\智能实验室预约通行系统` 备份而来，用于毕设「助手为主入口、页面可降级」实验，不覆盖原项目。  
+> 登录默认进入助手；预约/签须知/领码尽量在对话内确认后办理；助手不可用时仍走表单菜单。  
+> 技术栈：**Vue3 + FastAPI + MySQL + Redis + LangChain Tool + LangGraph**（硬件：ESP32-S3 + 串口二维码扫码模块 + 蜂鸣器）
 
-登录后管理实验室、预约审核、通行码与信用/报修；智能助手用自然语言查实验室、下预约、查通行码（SSE 流式回复）。
+## 为什么用这套栈
 
-| 层 | 技术 | 作用 |
-|----|------|------|
-| 前端 | Vue3、Vue Router、Element Plus、Vite | 管理端 + 学生端 H5（`/m`） |
-| 后端 | FastAPI、SQLAlchemy、Pydantic | 业务 API、Token 鉴权 |
-| 数据 | MySQL | 用户、实验室、预约、通行、排课 |
-| 缓存 | Redis | 会话/业务缓存 |
-| 智能 | LangGraph 手画状态图 + Tool | 查库、预约、通行码 |
-| 硬件 | ESP32-S3 + 串口扫码模块 | 门口核验（可选） |
-
-## 功能要点
-
-1. **预约闭环：** 申请 → 审批（或自动通过）→ 领通行码 → 门口/模拟门核验。
-2. **Agent：** `StateGraph` + Tool（查实验室、创建预约、我的预约、通行码；管理员另有排课工具）。未配置 `LLM_API_KEY` 时可降级。
-3. **流式对话：** `POST /api/ai/chat/stream`（SSE），前端边打字边显示过程。
+与本人 `D:\全栈\全部知识点`、`等保实验agent注册登录模块备份` 同一路线，便于开发与答辩讲解；Agent/LangGraph 在 Python 侧原生集成。
 
 ## 目录
 
-```text
-front/                 Vue3 前端
-backend/
-  src/                 FastAPI（工作目录需含 PYTHONPATH=src）
-  sql/                 建表与演示种子
-  scripts/             种子/冒烟脚本
-firmware/              ESP32-S3 门口固件（可选）
-docker-compose.yml     一键起 MySQL + Redis + 后端 + 前端
-```
+见 `docs/00-目录说明.md`。知识点对照见 `D:\全栈\全部知识点\06-项目对照-智能实验室预约通行\`。
 
-本仓库**不含**个人笔记、开题文档、本机 `.env` 与密钥。
+## 快速启动（登录注册已就位）
 
----
+### 1) 数据库
 
-## 方式一：Docker（推荐）
+MySQL 执行 `backend/sql/01_init.sql`（库名 `lab_access`）。
 
-依赖：Docker / Docker Compose。
-
-```bash
-cp .env.example .env
-# 可选：填 LLM_API_KEY（阿里云百炼 OpenAI 兼容）
-
-docker compose up -d --build
-```
-
-| 服务 | 地址 |
-|------|------|
-| 前端 | http://127.0.0.1:5173 |
-| 后端 API / 文档 | http://127.0.0.1:8000/docs |
-| MySQL | `127.0.0.1:3306` 库 `lab_access`（默认 root / 123456） |
-| Redis | `127.0.0.1:6379` |
-
-首次启动会按 `backend/sql/` 初始化表结构与演示实验室。请在页面**注册**学生账号；管理员需在库里改 `user.role='admin'`，或用：
-
-```bash
-docker compose exec backend python scripts/seed_teacher.py
-```
-
-镜像名：
-
-- `lab-reservation-agent-backend:latest`
-- `lab-reservation-agent-front:latest`
-
-单独构建：
-
-```bash
-docker compose build
-# 或
-docker build -t lab-reservation-agent-backend:latest ./backend
-docker build -t lab-reservation-agent-front:latest ./front
-```
-
----
-
-## 方式二：本机开发
-
-依赖：Python 3.12+、Node 22+、pnpm、MySQL、Redis。
-
-### 1. 数据库
-
-按顺序执行 `backend/sql/` 下脚本（`01` → `05`）。
-
-### 2. 后端
+### 2) 后端
 
 ```bash
 cd backend
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-# 编辑 DATABASE_URL / REDIS_URL / LLM_*
-
-export PYTHONPATH=src   # Windows: set PYTHONPATH=src
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+copy .env.example .env
+# 按需改 DATABASE_URL
+uv venv .venv
+.venv\Scripts\activate
+uv pip install -r requirements.txt
+set PYTHONPATH=src
+uvicorn main:app --reload --port 8000
 ```
 
-### 3. 前端
+### 3) 前端
 
 ```bash
 cd front
 pnpm install
-pnpm dev
+pnpm run dev
 ```
 
-Vite 将 `/api` 代理到 `127.0.0.1:8000`。浏览器打开终端打印的本地地址。
+浏览器打开 Vite 地址 → 注册学生账号 → 登录进入 Layout。
 
----
+## 阶段
 
-## 助手相关接口
-
-| 方法 | 路径 | 说明 |
+| 阶段 | 内容 | 状态 |
 |------|------|------|
-| POST | `/api/user/login` | 登录，返回 token |
-| POST | `/api/ai/chat` | 整包回复 |
-| POST | `/api/ai/chat/stream` | SSE 流式 |
+| A0 | 工程骨架 + 登录注册 | ✅ 已完成（本机可登录） |
+| A1 | 实验室 + 预约冲突 + 审批 | ✅ 已完成（本机有数据） |
+| A2 | 须知 + 凭证 + 核验 + 模拟门 | ✅ 已完成（冒烟全流程通过） |
+| A3 | 管理看板 + 消息/信用/报修闭环 | ✅ 已完成 |
+| A4 | Agent + LangGraph | ✅ 已完成（助手对话正常） |
+| A4b | 制度 RAG（FAISS：须知/开放/管理员） | ✅ 已接入 `search_lab_docs` |
+| A4c | 管理员 AI 辅助审批（低风险可自动过） | ✅ `ai_review` / `auto_process_pending` |
+| M1 | 学生端小程序态 H5（`/m`） | ✅ 页面已铺，待真机验收 |
+| B1 | ESP32-S3 + 串口二维码扫码模块 | 硬件待做；verify 接口已就绪 |
 
-请求头：`Authorization: Bearer <token>`，`Content-Type: application/json`。  
-请求体示例：`{"messages":[{"role":"user","content":"..."}]}`。
+### 制度文档 RAG（FAISS）
 
----
+语料在 `backend/kb_source/`（安全须知、开放规则、管理员联系、实验室专篇）。  
+预约空闲仍走业务 Tool；问规则/安全/找谁时助手调 `search_lab_docs`。
 
-## 固件（可选）
+```bash
+# 推荐：单独用 Python 3.12 隔离环境装 faiss-cpu（不要用 3.13 的旧 .venv）
+# WSL / Linux 示例：
+uv venv ~/venvs/lab-faiss-py312 --python 3.12
+source ~/venvs/lab-faiss-py312/bin/activate
+cd backend
+uv pip install -r requirements.txt --index-url https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com
+export PYTHONPATH=src
+python scripts/build_faiss_kb.py
+# 看到 backend.json 里 "backend": "faiss" 即真·FAISS
+```
 
-见 [firmware/README.md](firmware/README.md)。烧录前务必改 `config.h` 里的 Wi-Fi 与 `VERIFY_URL`，**不要提交真实密码**。
+索引目录：`backend/data/faiss_lab/`（含 `index.faiss`；可本地生成）。  
+若坚持用 Python 3.13 且装不上 faiss-cpu，代码会降级 numpy 内积；隔离换成 3.12 后即可走真 FAISS。  
+自测：登录助手问「安全须知有哪些禁止事项」「管理员联系谁」「周末开吗」。改完工具后请重启后端以清图缓存。  
+日常跑 uvicorn 也可：`PYTHONPATH=src ~/venvs/lab-faiss-py312/bin/uvicorn main:app --reload --port 8000`（在 backend 目录）。
 
----
+### 管理员 AI 辅助审批
 
-## 说明
+管理员登录助手可用：`list_pending_reservations`、`ai_review_reservation`（规则+AI建议，默认不改库）、`auto_process_pending`（仅自动通过低风险高置信；存疑进 need_human，不自动驳回）、`apply_reservation_decision`（明确通过/驳回）。  
+硬条件：时长≤4h、信用≥60、非深夜。  
+资格路径（满足其一）：用途合格；或历史成功预约≥2（可调 `LAB_AUTO_APPROVE_MIN_HISTORY`）；或工号在白名单 `data/trusted_employee_nos.txt`（助手可 `add_trusted_employee_no`）。  
+再叠加 AI 建议 approve 且置信度≥0.75 才自动通过。页面原审批按钮仍可用。  
+测法：录入工号 → 该学生提单 → 管理员 dry_run / 自动过；或同一学生多次通过后再提一笔看「历史路径」。
 
-- 演示默认密码仅用于本地/实验环境，上线请修改 MySQL root 与业务账号密码。
-- 聊天记录默认在浏览器内存中，刷新会丢；预约与通行结果在 MySQL。
-- 仓库地址：https://github.com/1109528927/lab-reservation-agent
+进度详表：`docs/09-任务推进计划书.md`（会随你反馈实时更新）
+
+## 参考
+
+- 登录注册完整步骤：等保备份里的 `登录注册可复用完整笔记.md`  
+- LangGraph：`全部知识点/03-Agent/LangGraph/01-LangGraph详解.md`

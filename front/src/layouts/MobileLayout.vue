@@ -15,10 +15,10 @@ const user = computed(() => {
 })
 
 const tabs = [
-  { path: '/m/home', label: '首页', icon: House },
+  { path: '/m/agent', label: '助手', icon: ChatDotRound },
   { path: '/m/reserve', label: '预约', icon: Calendar },
   { path: '/m/pass', label: '通行码', icon: Key },
-  { path: '/m/agent', label: '助手', icon: ChatDotRound },
+  { path: '/m/home', label: '首页', icon: House },
   { path: '/m/mine', label: '我的', icon: User }
 ]
 
@@ -32,7 +32,11 @@ const active = computed(() => route.path)
       <div class="mp-nav-sub">{{ user.username || '未登录' }}</div>
     </header>
     <main class="mp-main">
-      <router-view />
+      <router-view v-slot="{ Component }">
+        <keep-alive :include="['MobileAgent']">
+          <component :is="Component" />
+        </keep-alive>
+      </router-view>
     </main>
     <nav class="mp-tabbar">
       <button

@@ -8,7 +8,7 @@ const router = createRouter({
     {
       path: '/m',
       component: () => import('@/layouts/MobileLayout.vue'),
-      redirect: '/m/home',
+      redirect: '/m/agent',
       children: [
         { path: 'home', name: 'MHome', component: () => import('@/views/mobile/Home.vue') },
         {
@@ -28,6 +28,7 @@ const router = createRouter({
       path: '/manager',
       name: 'Layout',
       component: () => import('@/layouts/Layout.vue'),
+      redirect: '/manager/agent',
       children: [
         { path: 'home', name: 'Home', component: () => import('@/views/Home.vue') },
         { path: 'lab', name: 'Lab', component: () => import('@/views/manager/Lab.vue') },
@@ -66,6 +67,16 @@ const router = createRouter({
           path: 'credit',
           name: 'MgrCredit',
           component: () => import('@/views/manager/CreditAdmin.vue')
+        },
+        {
+          path: 'students',
+          name: 'MgrStudents',
+          component: () => import('@/views/manager/StudentsBulk.vue')
+        },
+        {
+          path: 'password-requests',
+          name: 'MgrPasswordRequests',
+          component: () => import('@/views/manager/PasswordRequests.vue')
         }
       ]
     }
